@@ -122,4 +122,4 @@ output:
 
 debug:
   dump: false
-  dump_file: "logs/debug.log"
+  dump_file: "logs/debug.log" #(empty = logs/pr_<id>_debug.log)

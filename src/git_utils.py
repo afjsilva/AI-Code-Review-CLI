@@ -13,6 +13,7 @@ Works with any Git repository, including TFS/Azure DevOps.
 import subprocess
 import os
 from typing import Optional
+import re
 
 class GitError(Exception):
     """Exception for Git-related errors."""
@@ -284,35 +285,20 @@ class GitUtils:
     # ------------------------------------------------------------------
     def filter_diff_additions_only(self, diff: str) -> str:
         """
-        Removes context lines and deleted lines (-) from the diff.
-        Keeps only added lines (+) and structural headers needed for the LLM.
+        Removes context lines and deleted lines (-) from the diff, but annotates
+        each kept '+' line with its authoritative line number in the new file,
+        computed from the hunk header before any lines are stripped.
 
-        Lines kept:
-            - ``diff --git ...``
-            - ``--- a/...``
-            - ``+++ b/...``
-            - ``@@ ... @@``
-            - ``+ <content>``
+        Output format for kept added lines: "+<new_line_number>| <content>"
+        e.g. "+28| [Ignore]"
 
-        FULL_FILE_CONTEXT blocks — delimited by
-        ``### FULL_FILE_CONTEXT_START: <path> ###`` and
-        ``### FULL_FILE_CONTEXT_END ###`` — are preserved in their entirety.
-        These blocks are appended by
-        :py:meth:`TFSClient._build_unified_diff_part` and carry the complete
-        new-version file content as read-only background for the LLM.  Every
-        line between the sentinel markers is kept, regardless of whether it
-        starts with ``+``, ``-``, or a space.
-
-        Args:
-            diff: Raw unified diff string, possibly containing
-                FULL_FILE_CONTEXT blocks.
-
-        Returns:
-            Filtered diff string with context/deleted lines stripped but
-            FULL_FILE_CONTEXT blocks intact.
+        This removes the need for the LLM to infer/recompute line numbers from
+        stale hunk-header arithmetic after filtering.
         """
         result = []
         in_context_block = False
+        new_line_num = None  # tracks current line number in the new-file version
+
         for line in diff.split("\n"):
             if line.startswith("### FULL_FILE_CONTEXT_START:"):
                 in_context_block = True
@@ -325,15 +311,36 @@ class GitUtils:
             if in_context_block:
                 result.append(line)
                 continue
-            if (
-                line.startswith("diff --git")
-                or line.startswith("--- ")
-                or line.startswith("+++ ")
-                or line.startswith("@@")
-                or (line.startswith("+") and not line.startswith("+++"))
-            ):
+
+            if line.startswith("diff --git") or line.startswith("--- ") or line.startswith("+++ "):
                 result.append(line)
-            # Context lines, deleted lines and '\ No newline' markers are discarded.
+                continue
+
+            if line.startswith("@@"):
+                # parse "@@ -oldStart,oldCount +newStart,newCount @@"
+                match = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+                new_line_num = int(match.group(1)) if match else None
+                result.append(line)
+                continue
+
+            if line.startswith("+") and not line.startswith("+++"):
+                if new_line_num is not None:
+                    result.append(f"+{new_line_num}| {line[1:]}")
+                    new_line_num += 1
+                else:
+                    result.append(line)
+                continue
+
+            if line.startswith("-") and not line.startswith("---"):
+                # deletions don't advance new_line_num, just skip
+                continue
+
+            if line.startswith(" ") or line == "":
+                # context line: advances new_line_num but is discarded from output
+                if new_line_num is not None:
+                    new_line_num += 1
+                continue
+
         return "\n".join(result)
 
     def _split_diff_sections(self, diff: str) -> tuple[list[list[str]], bool]:

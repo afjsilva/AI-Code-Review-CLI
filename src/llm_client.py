@@ -182,13 +182,17 @@ def get_scope_guidance(review_scope: str, structured: bool = False) -> str:
 
     if structured:
         return (
-            "Review scope: diff_only. The diff contains only added lines (+) — context and deletions were removed. "
+            "Review scope: diff_only. The diff contains only added lines (+) - context and deletions were removed. "
             "The complete new-version file content, after the changes (between ### FULL_FILE_CONTEXT_START and ### FULL_FILE_CONTEXT_END markers) "
             "is provided for each file as read-only context. "
             "Use it to understand the surrounding code, but focus your review EXCLUSIVELY on the changed lines (marked + in the diff). "
             "Do NOT report issues in unchanged lines unless they directly affect the correctness of the changes. "
             "For every problem, you MUST provide a valid file and line (>0) to allow inline comments. "
-            "Do not emit general problem comments without file/line."
+            "Do not emit general problem comments without file/line. "
+            "Each added line in the diff is pre-annotated with its authoritative line number in the new file, "
+            "in the format `+<line_number>| <content>` (e.g. `+28| [Ignore]`). Always use this exact number "
+            "for the `line` field in your JSON output. The `@@ -x,y +a,b @@` hunk header numbers are stale after "
+            "filtering and must be ignored entirely - do not use them to compute or double-check line numbers."
         )
 
     return (
@@ -248,7 +252,7 @@ class LLMClient:
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
         try:
-            with open(log_path, "a", encoding="utf-8") as f:
+            with open(log_path, "w", encoding="utf-8") as f:
                 f.write(f"\n{'=' * 80}\n")
                 f.write(f"[FULL CONTEXT SENT TO LLM] {datetime.datetime.now().isoformat()}\n")
                 f.write(f"Provider: {self.config.llm_provider} | Model: {self.config.get_effective_model()}\n")
